@@ -8,7 +8,8 @@ Running Xpra sessions in a Kubernetes cluster
  on a exported filessystem.
  It will create a subdir demo-xpra. Under this directory the files
  will be placed. This setup is an example how to run Xpra without any
- modification in the source-code of Xpra. (xpra.org)
+ modification in the source-code of Xpra. (xpra.org) Except for one change on the
+ client side, see step 4.
 
  Needed to run is a K8 cluster with or without Multus and Ldap environment. 
  This setup is done with a FreeIpa environment, used only the ldap functionality.
@@ -79,9 +80,9 @@ Running Xpra sessions in a Kubernetes cluster
 
  Step 4:
 
- Test  with a Xpra client 
+ Test with a Xpra client 
  On the client search for the Python file client_base.py and change TIMEOUT_EXTRA=10 to the
- value 90. To startup a pod with Xpra will take more time. Especially the first time
+ value 90. (this is the only change!!!) To startup a pod with Xpra will take more time. Especially the first time
  (downloading image), if it happens try a attach a few minutes
  later. Or use kubect -n demo-xpra get pod -o wide on the kubemaster to see what
  is happening.
