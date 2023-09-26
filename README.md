@@ -8,8 +8,7 @@ Running Xpra sessions in a Kubernetes cluster
  on a exported filessystem.
  It will create a subdir demo-xpra. Under this directory the files
  will be placed. This setup is an example how to run Xpra without any
- modification in the source-code of Xpra. (xpra.org) Except for one change on the
- client side, see step 4.
+ modification in the source-code of Xpra. (xpra.org)
 
  Needed to run is a K8 cluster with or without Multus and Ldap environment. 
  This setup is done with a FreeIpa environment, used only the ldap functionality.
@@ -61,8 +60,27 @@ Running Xpra sessions in a Kubernetes cluster
  and source-pathsof NFS. Also ldap settings etc,
  Under ansible you must adjust all the yaml-files under include, playbooks, etc.
 
+ Step 3: 
+
+ Create the namespace demo-xpra with kubectl create namespace demo-xpra
+ and create the secret xpra-proxy-kube with 
+  kubectl -n demo-xpra create secret xpra-proxy-kube --from-file=/root/.kube/config
+
+ Step 4: 
+
+ If you want to a second network so you can access the sessions directly with for example
+ ssl/wss (port# 14500/14543) os ssh (port# 14222) install multus. How this works see the
+ documentation. Go to the subdir multus and perform a kubectl apply -f multus-daemonset-thick.yml.
+ Adjust the file xpra-dhcp-mdns.yml for the underlaying extra NIC on the nodes. Further you
+ need a DHCP server on this second network, for example a Openwrt setup. Perform a
+ kubectl apply -f xpra-dhcp-mdns.yml.
+
+ If no multihomed pods edit the xpra-proxy-ssh.yaml (step 2) comment out the network definition.
+
+ Step 5:
+
  If this done go to .../demo-xpra/yaml en run kubectl apply -f xpra-proxy-ssh.yaml.
- It will make a namespace (demo-xpra), service and a pod xpra-proxy-XXXX.
+ it will deploy a service and a pod xpra-proxy-XXXX.
  Be aware the some names of yaml-files are depending on the directory name of this setup.
  For example ..../demo-xpra/common/cms/ansible/playbooks/demo-xpra-client.yaml and under
  ..../includes/demo-xpra.yaml.  If the directory name my-name than you must rename 
@@ -71,23 +89,16 @@ Running Xpra sessions in a Kubernetes cluster
  See also the content of .../demo-xpra/common/cms/ansible/playbooks/demo-xpra-client.yaml
  in the first lines.
 
- Step 3: (optional)
+ Step 6:
 
- Install Multus, go to the subdir multus adjust when necessary the yaml-files such as
- namespace and NIC names. Perform a kubectl apply -f multus-daemonset-thick.yml and
- kubectl apply -f xpra-dhcp-mdns.yml.
- Restart the proxy with kubectl -n <namespace eq: demo-xpra) delete pod xpra-proxy-XXXXX>
-
- Step 4:
-
- Test with a Xpra client 
+ Test  with a Xpra client 
  On the client search for the Python file client_base.py and change TIMEOUT_EXTRA=10 to the
- value 90. (this is the only change!!!) To startup a pod with Xpra will take more time. Especially the first time
+ value 90. To startup a pod with Xpra will take more time. Especially the first time
  (downloading image), if it happens try a attach a few minutes
  later. Or use kubect -n demo-xpra get pod -o wide on the kubemaster to see what
  is happening.
 
- xpra start-desktop --start=xfce4-session and cross your fingers.
+ xpra start-desktop ssh://<service ip-address:2222> --start=xfce4-session and cross your fingers.
 
  Multihomed.
 
@@ -95,16 +106,19 @@ Running Xpra sessions in a Kubernetes cluster
  are connected and the ip-address of the client is known the session also accessable with:
 
                  P.Q.R.S = ip-address
-                 xpra attach wss://P.Q.R.S:14500 --ssl-server-verify-mode=none 
+                 xpra attach wss://P.Q.R.S:14543 --ssl-server-verify-mode=none --ssl-ca-certs=<ssl-ca file>
                  or 
-                 xpra attach ssl://P.Q.R.S:14500 --ssl-server-verify-mode=none 
+                 xpra attach ssl://P.Q.R.S:14500 --ssl-server-verify-mode=none --ssl-ca-certs=<ssl-ca file>
                  or
                  browser with URL: https://P.Q.R.S:14500
                  and
                  xpra attach ssh:P.Q.R.S:14222
 
+ It is for the user/admin how to obtain the /etc/xpra/ssl-ca.pem from the session (xpra) pod/container. Scp/sftp 
+ will not work because of security.
+
  Creating a session can be done only via ssh. For more protection a firewall can be used instead
- of router, only pass port 14500 and 14222.
+ of router, only pass port 14500,14543 and 14222. If no ssh access is permitted block port 14222.
 
  In cases where more security is desired separate the ssh-proxy from the k8 cluster and shows
  only the ip-address of the created session. Shut port 14222 on a firewall and let users 
@@ -125,3 +139,5 @@ Running Xpra sessions in a Kubernetes cluster
 
  Hopefully this setup will inspire a lot of people. I am now a retired engineer with Unix background
  until 1979 so be free to use it as starting point. And how it is done study on the scripts.
+ BTW. A similar setup can be also done for other container techniques or for example full virtuals machines.
+      Also a pretty solution to put applications behind bars or stepping-stones with X11 support.
