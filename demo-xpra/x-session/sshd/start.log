@@ -1,0 +1,83 @@
++ XPRA_TOPDIR_INT=/srv
++ export XPRA_TOPDIR_INT
++ ROOT_DIRS='root os-root'
++ for d in ${ROOT_DIRS}
++ cd /srv/root/.
++ for d in ${ROOT_DIRS}
++ cd /srv/os-root/.
++ tar cf - .
++ cd /
++ tar xf -
++ '[' -f /etc/ssh/sshd_config ']'
++ sed -i -e 's/\([Ss][Uu][Bb][Ss][Yy][Ss][Tt][Ee][Mm]..*[Ss][Ff][Tt][Pp]\)/#\1/' -e s/#AuthorizedKeysFile/AuthorizedKeysFile/ -e 's%AuthorizedKeysFile%AuthorizedKeysFile  /run/etc/ssh-keys/authorized_keys %' -e '$aPermitOpen 127.0.0.1:14080 localhost:14080' /etc/ssh/sshd_config
++ '[' 'lmulder:*:1000:1000:Louis Mulder:/home/lmulder:/bin/bash' '!=' '' ']'
++++ mktemp -d
+++ EMPTY=/tmp/tmp.EOf4wsAnsx
+++ cd /tmp/tmp.EOf4wsAnsx
+++ IFS=:
+++ set -- lmulder '*' 1000 1000 'Louis Mulder' /home/lmulder /bin/bash
+++ '[' lmulder '!=' '' ']'
+++ echo 'AllowUsers lmulder'
+++ rmdir /tmp/tmp.EOf4wsAnsx
+++ echo 'UID_GID='\''1000:1000'\'''
++ eval 'UID_GID='\''1000:1000'\'''
+++ UID_GID=1000:1000
++ '[' '!' -f /run/etc/ssh-keys/authorized_keys ']'
++ mkdir -p /run/etc/ssh-keys
++ cat /etc/ssh-keys/id-rsa.pub
++ cp /etc/ssh-keys/id-rsa /run/etc/ssh-keys/id-rsa
++ '[' 1000:1000 '!=' '' ']'
++ chown /run/etc/ssh-keys/id-rsa
+chown: missing operand after '/run/etc/ssh-keys/id-rsa'
+Try 'chown --help' for more information.
++ '[' -f /etc/pam.d/common-session ']'
++ egrep 'session..*optional..*pam_oddjob_mkhomedir.so'
++ sed -i -e '/pam_systemd.so/isession optional pam_oddjob_mkhomedir.so\n' /etc/pam.d/common-session
++ '[' -f /etc/sssd/sssd.conf ']'
++ egrep 'override_shell..*=..*/srv/sbin/xpra_x-session'
++ sed -i -e '/\[[Dd][Oo][Mm][Aa][Ii][Nn]..*/aoverride_shell = /srv/sbin/xpra_x-session\noverride_homedir = /tmp/%u' /etc/sssd/sssd.conf
++ cd /srv/etc/rc1.d
++ set -- S01copyfromroot.sh S10dbus.sh S20net1.sh S30avahi.sh S40sssd.sh S50oddjobd.sh S60gencerts.sh S98watch_localhost_14080.sh S99sshd.sh
++ case ${1} in
++ shift
++ '[' 8 -gt 1 ']'
++ echo Starting S10dbus.sh
++ '[' -x ./S10dbus.sh ']'
++ ./S10dbus.sh start
++ shift
++ '[' 7 -gt 1 ']'
++ echo Starting S20net1.sh
++ '[' -x ./S20net1.sh ']'
++ ./S20net1.sh start
++ shift
++ '[' 6 -gt 1 ']'
++ echo Starting S30avahi.sh
++ '[' -x ./S30avahi.sh ']'
++ ./S30avahi.sh start
++ shift
++ '[' 5 -gt 1 ']'
++ echo Starting S40sssd.sh
++ '[' -x ./S40sssd.sh ']'
++ ./S40sssd.sh start
++ shift
++ '[' 4 -gt 1 ']'
++ echo Starting S50oddjobd.sh
++ '[' -x ./S50oddjobd.sh ']'
++ ./S50oddjobd.sh start
++ shift
++ '[' 3 -gt 1 ']'
++ echo Starting S60gencerts.sh
++ '[' -x ./S60gencerts.sh ']'
++ ./S60gencerts.sh start
+./S60gencerts.sh: line 31: openssl: command not found
+cat: cert.pem: No such file or directory
+cat: key.pem: No such file or directory
++ shift
++ '[' 2 -gt 1 ']'
++ echo Starting S98watch_localhost_14080.sh
++ '[' -x ./S98watch_localhost_14080.sh ']'
++ ./S98watch_localhost_14080.sh start
++ shift
++ '[' 1 -gt 1 ']'
++ '[' -x ./S99sshd.sh ']'
++ exec ./S99sshd.sh start

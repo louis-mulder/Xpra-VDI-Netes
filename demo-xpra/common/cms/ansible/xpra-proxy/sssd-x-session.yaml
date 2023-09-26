@@ -1,0 +1,87 @@
+# Configure in /srv/to-container/x-session/os-root/etc/sssd
+---
+- name: 
+  hosts: localhost
+  connection: local
+  vars:
+
+    ldap_server: "idm01.demo.xpra"
+    playbook_name: "{{ (lookup('file', '/proc/self/cmdline') | regex_replace('\u0000',' ')).split()|select('match','^[a-z-_/]*[.]y[a]*ml')|list|first }}"
+
+  tasks:
+
+    - name: "playbook name {{ playbook_name }}"
+      shell: date
+
+
+    - name: get environment variable XPRA_TOPDIR_INT
+      set_fact:
+          xpra_topdir_int: "{{ lookup( 'env', 'XPRA_TOPDIR_INT') }}"
+
+    - name: "Create path {{ xpra-topdir_int }}/to-container/x-session/(xpra and sshd)os-root/etc/ipa, placeholder certificate"
+      file:
+        path: "{{ item }}"
+        recurse: true
+        state: directory
+        mode: '0755'
+      with_items:
+      - "{{ xpra_topdir_int }}/to-container/x-session/xpra/os-root/etc/ipa"
+      - "{{ xpra_topdir_int }}/to-container/x-session/sshd/os-root/etc/ipa"
+      when: ldap_server is defined
+
+    - name: Obtain certificate for ldap provider for sssd
+      get_url:
+          url: "http://{{ ldap_server }}/ipa/config/ca.crt"
+          dest: "{{ item }}"
+      with_items:
+      - "{{ xpra_topdir_int }}/to-container/x-session/xpra/os-root/etc/ipa/ca.crt"
+      - "{{ xpra_topdir_int }}/to-container/x-session/sshd/os-root/etc/ipa/ca.crt"
+      when: ldap_server is defined
+      delegate_to: localhost
+
+    #- name: "Create path {{ xpra-topdir_int }}/to-container/x-session/os-root/etc/sssd"
+    #  file:
+    #    path: "{{ xpra_topdir_int }}/to-container/x-session/os-root/etc/sssd"
+    #    recurse: true
+    #    state: directory
+    #    mode: '0700'
+    #  when: ldap_server is defined
+
+    - name: "Copy SSSD conf to {{ xpra_topdir_int }}/to-container/x-session/os-root/etc/ansible/sssd -- x-session container"
+      copy:
+         mode: '0600'
+         dest: "{{ xpra_topdir_int }}/to-container/x-session/{{ item }}/os-root/etc/sssd/sssd.conf"
+         backup: yes
+         content: |
+             #
+             # Source: /srv/ansible/playbooks/sssd-x-session.yaml
+             #
+             [domain/demo.xpra]
+             id_provider = ldap
+             autofs_provider = ldap
+             auth_provider = ldap
+             chpass_provider = ldap
+             ldap_uri = ldap://idm01.demo.xpra
+             ldap_search_base = dc=demo,dc=xpra
+             ldap_id_use_start_tls = True
+             cache_credentials = True
+             ldap_tls_reqcert = allow
+             ldap_tls_cacert = /etc/ipa/ca.crt
+             
+             [sssd]
+             services = nss, pam, ssh
+             domains = demo.xpra
+             
+             [nss]
+             homedir_substring = /home
+             
+             [ssh]
+
+             [pam]
+
+      with_items:
+      - xpra
+      - sshd
+      run_once: yes
+      when: ldap_server is defined
+      delegate_to: localhost

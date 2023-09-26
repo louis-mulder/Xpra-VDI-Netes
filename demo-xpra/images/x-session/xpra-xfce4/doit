@@ -1,0 +1,67 @@
+#!/bin/bash
+
+REGISTRY='registry.demo.xpra:5443/xpra-xfce4'
+export REGISTRY
+
+CONTAINER=${1:-`buildah from centos:stream8`}
+(
+cat <<EOF
+#!/bin/bash
+[ -f /etc/profile.d/lang.sh ] && source /etc/profile.d/lang.sh 
+yum makecache
+yum install -y wget curl
+yum -y install epel-release
+
+cd /etc/yum.repos.d/
+[ -f xpra.repo ] && rm -f xpra.repo
+wget https://raw.githubusercontent.com/Xpra-org/xpra/master/packaging/repos/almalinux/xpra.repo
+cd -
+yum makecache
+yum install -y openssh-clients openssh-askpass openssh-ldap sssd socat avahi-tools \
+               avahi python3-avahi vim bash-completion glibc-all-langpacks langpacks-en 
+
+yum install -y telnet python3-uinput pavucontrol xfce4-pulseaudio-plugin pulseaudio-utils pulseaudio \
+	       dhcp-libs dhcp-common dhcp-client authconfig oddjob-mkhomedir 
+
+yum groupinstall -y "Xfce"
+yum install -y firefox xpra
+
+yum remove -y xfce4-screensaver
+
+[ -f /usr/bin/xfce4-screensaver ] && rm -rf /usr/bin/xfce4-screensaver # Be sure it is gone
+rpm -qa libreoffice7.6-base | grep base > /dev/null
+
+if [ ${?} != 0 ]
+then
+   cd /var/tmp
+   wget https://tdf.mirror.liteserver.nl/libreoffice/stable/7.6.0/rpm/x86_64/LibreOffice_7.6.0_Linux_x86-64_rpm.tar.gz -O -| tar xvzf -
+   cd LibreOffice_7.6.0.3_Linux_x86-64_rpm/RPMS
+   yum install -y *.rpm
+   rm -rf LibreOffice_7.6.0.3_Linux_x86-64_rpm
+fi
+
+cd /var
+mkdir initial-log
+cd log
+tar cf /var/initial-log/log.tar .
+
+authconfig --enablemkhomedir --update
+sed -i -e 's/\\(^group.* \\)\\(systemd\\)/\\1/' -e 's/\\(^passwd.* \\)\\(systemd\\)/\\1/' /etc/nsswitch.conf
+
+rpm -ev --nodeps dracut NetworkManager dracut-squash dracut-network lin ux-firmware NetworkManager-wifi \
+	  wpa_supplicant > /dev/null 2>&1
+
+rpm -ev --nodeps grub2-tools cracklib-dicts systemd-udev ModemManager-glib NetworkManager-libnm \
+	  snappy grub2-common libdvdread mobile-broadband-provider-info > /dev/null 2>&1
+
+
+exit 0
+EOF
+) | buildah run -t ${CONTAINER} bash
+
+IMAGE=`buildah commit ${CONTAINER}`
+
+echo ${IMAGE}
+
+podman tag ${IMAGE} ${REGISTRY}
+podman push  ${REGISTRY}

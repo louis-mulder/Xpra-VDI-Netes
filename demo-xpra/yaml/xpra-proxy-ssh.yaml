@@ -1,0 +1,243 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-xpra
+---
+---
+apiVersion:  apps/v1
+kind: Deployment
+metadata:
+  name: xpra-proxy
+  namespace: demo-xpra
+  labels:
+    app: xpra-proxy-ssh
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: xpra-proxy-ssh
+  template:
+     metadata:
+      annotations:
+        k8s.v1.cni.cncf.io/networks: demo-xpra-mdns
+      labels:
+        app: xpra-proxy-ssh
+     spec:
+      initContainers:
+      - name: init-iptables
+        image: "registry.demo.xpra:5443/xpra-iptables"
+        securityContext:
+          capabilities:
+             add: ["NET_ADMIN", "SYS_TIME","SYS_ADMIN","NET_RAW"]
+        command: [ "iptables-restore","/srv/etc/iptables/rules" ]
+        volumeMounts:
+        - mountPath: /srv
+          name: demo-xpra
+          subPath: common/iptables
+
+      - name: init-proxy
+        image: "registry.demo.xpra:5443/xpra-ansible"
+        command: ["/srv/bin/config_proxy.sh"]
+        envFrom:
+        - configMapRef:
+             name: xpra-env
+        volumeMounts:
+        - mountPath: /srv
+          name: demo-xpra
+          subPath: common/cms
+        - mountPath: /dev/uinput
+          name: dev
+          subPath: uinput
+        - mountPath: /run
+          name: shared-ephemeral
+          subPath: run-init-container
+        - mountPath: /srv/ansible
+          name: demo-xpra
+          subPath: common/cms/ansible
+        - mountPath: /srv/to-container
+          name: demo-xpra
+
+      containers:
+      - name: ansible
+        image: "registry.demo.xpra:5443/xpra-ansible"
+        resources:
+          requests:
+             ephemeral-storage: "1Gi"
+          limits:
+             ephemeral-storage: "2Gi"
+        securityContext:
+          capabilities:
+             add: ["NET_ADMIN", "SYS_TIME","SYS_ADMIN","NET_RAW"]
+        command: ["/srv/bin/start.sh"]
+
+        envFrom:
+        - configMapRef:
+             name: xpra-env
+
+        volumeMounts:
+        - mountPath: /srv
+          name: demo-xpra
+          subPath: common/cms
+        - mountPath: /srv/etc/init.d
+          name: demo-xpra
+          subPath: common/etc/init.d
+        - mountPath: /shrd-tmp
+          name: demo-xpra
+          subPath: common/scratch/tmp
+        - mountPath: /home
+          name: home
+        - mountPath: /root/.kube
+          name: xpra-proxy-kube
+          readOnly: true
+        - mountPath: /dev/uinput
+          name: dev
+        - mountPath: /run
+          name: shared-ephemeral
+          subPath: run-ansible
+        - mountPath: /run/shared-sockets
+          name: shared-ephemeral
+          subPath: shared-sockets
+        - mountPath: /srv/to-container
+          name: demo-xpra
+
+      - name: proxy-ssh
+        image: "registry.demo.xpra:5443/xpra-sshd"
+        resources:
+          requests:
+             ephemeral-storage: "1Gi"
+          limits:
+             ephemeral-storage: "2G"
+        securityContext:
+          capabilities:
+             add: ["NET_ADMIN", "SYS_TIME","SYS_ADMIN","NET_RAW"]
+
+        command: ["/srv/bin/start.sh"]
+
+        volumeMounts:
+        - mountPath: /srv/etc/init.d
+          name: demo-xpra
+          subPath: common/etc/init.d
+        - mountPath: /srv
+          name: demo-xpra
+          subPath: xpra-proxy/sshd
+        - mountPath: /sys/fs/cgroup
+          name: sys
+          subPath: fs/cgroup
+          readOnly: true
+        - mountPath: /dev/shm
+          name: dshm
+        - mountPath: /root/.kube
+          name: xpra-proxy-kube
+          readOnly: true
+        - mountPath: /run/shared-sockets
+          name: shared-ephemeral
+          subPath: shared-sockets
+        - mountPath: /run
+          name: shared-ephemeral
+          subPath: run-sshd
+        - mountPath: /dev/uinput
+          name: dev
+          subPath: uinput
+
+      volumes:
+
+      - name: demo-xpra
+        nfs:
+         server: synology02.demo.xpra
+         path: /volume2/xpra/data/srv/demo-xpra
+
+      - name: home
+        nfs:
+         server: synology02.demo.xpra
+         path: /volume2/home
+
+      - name: sys
+        hostPath:
+         path: /sys
+         type: Directory
+
+      - name: dev
+        hostPath:
+         path: /dev
+
+      - name: dshm
+        emptyDir:
+          medium: Memory
+
+      - name: shared-ephemeral
+        emptyDir:
+          medium: Memory
+          sizeLimit: 1024Mi
+
+      - name: "xpra-proxy-kube"
+        secret:
+          secretName: "xpra-proxy-kube"
+          defaultMode: 256
+
+      nodeSelector:
+      restartPolicy: Always
+      hostAliases:
+      - ip: "192.168.1.233"
+        hostnames:
+        - "idm01.demo.xpra"
+        - "idm01"
+      - ip: "192.168.1.218"
+        hostnames:
+        - "registry"
+        - "registry.demo.xpra"
+      - ip: "192.168.1.230"
+        hostnames:
+        - "cluster-endpoint.demo.xpra"
+        - "cluster-endpoint"
+
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: xpra-proxy-ssh
+  namespace: demo-xpra
+  name: xpra-proxy-ssh
+spec:
+  externalIPs:
+  - 192.168.1.215
+  externalTrafficPolicy: Cluster
+  ports:
+    - port: 2222
+      protocol: TCP
+      targetPort: 14222
+  selector:
+    app: xpra-proxy-ssh
+  type: NodePort
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+    name: xpra-env
+    namespace: demo-xpra
+data:
+   SRC_PORT: "14500"
+   PROTO_TYPE: "tcp"
+   PASSWD_ENTRY: ""
+   SSL: "on"
+   SSL_CERT: "/etc/xpra/ssl/ssl-cert.pem"
+   GROUP_ENTRIES: ""
+   XPRA_CONNECT_TIMEOUT: "60"
+   XPRA_EXEC_AUTH_TIMEOUT: "900"
+   XPRA_IDM_SERVERS: "192.168.1.230:idm01.demo.xpra"
+   XPRA_LOCAL_TIME: "/usr/share/zoneinfo/Europe/Amsterdam"
+   XPRA_MAX_CONCURRENT_CONNECTIONS: "384"
+   XPRA_MODE: "proxy"
+   XPRA_PING_TIMEOUT: "120"
+   XPRA_PROXY_SOCKET_TIMEOUT: "0.8"
+   XPRA_PROXY_WS_TIMEOUT: "0.8"
+   XPRA_REGISTRY_SRV: "registry.demo.xpra:5443"
+   XPRA_SCRATCH_EXT: "/data/srv/demo-xpra/common/scratch/tmp"
+   XPRA_SOCKET_TIMEOUT: "180"
+   XPRA_TOPDIR_EXT: "/volume2/xpra/data/srv/demo-xpra/"
+   XPRA_TOPDIR_INT: "/srv"
+   NAMESPACE: "demo-xpra"
+   SEARCH_DOMAINS: 'demo-xpra demo.xpra lufaan.nl'
+   XPRA_MODE: "proxy"

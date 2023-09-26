@@ -1,0 +1,69 @@
+#!/bin/bash
+
+U_USER=`id -un`
+
+
+[ ${#} -lt 1 ] && exit 1
+
+ set -- ${*}
+
+ while [ "${1}" = '-c' ]
+ do
+     shift
+ done
+
+ CMD=`echo "${@}" | sed -e 's%^%#%' \
+                        -e 's/\\\$/'"'$'/"\
+                        -e 's/^#//'`
+ CMD=`eval echo ${CMD}`
+
+ # exec rsh -l ${U_USER} localhost ${CMD}
+
+
+ SOCAT=`command -v socat`
+
+ case ${CMD} in
+ #(
+ command|\
+ command*xpra*)
+              if [  "${SOCAT}" != '' -a -S /run/xpra/u-socket/command-lock ]
+              then 
+                echo "${CMD}" | ${SOCAT} - UNIX-CONNECT:/run/xpra/u-socket/command-lock 
+              else
+                exec rsh -l ${U_USER} localhost ${CMD}
+              fi
+ ;;
+ #(
+ *xpra*proxy* )
+              if [  "${SOCAT}" != '' -a -S /run/xpra/u-socket/command-lock ]
+              then 
+                HOSTNAME=`hostname -s`
+                cd /run/xpra
+                set -- ${HOSTNAME}*
+                while [ ${1} != '' ]
+                do
+                 if [ -S "${1}" ]
+                 then
+                     exec ${SOCAT} - UNIX-CONNECT:/run/xpra/${1}
+                 fi 
+                 shift
+                done
+              else
+                exec rsh -l ${U_USER} localhost ${CMD}
+              fi
+ ;;
+ #(
+ echo*OSTYPE )
+              if [  "${SOCAT}" != '' -a -S /run/xpra/u-socket/command-lock ]
+              then 
+                echo 'echo ${OSTYPE}' | socat - UNIX-CONNECT:/run/xpra/u-socket/command-lock
+              else
+               echo 'exec echo ${OSTYPE}' | exec rsh -l ${U_USER} localhost  bash
+              fi
+ ;;
+ #(
+ *%OS%* ) exit 0
+ ;;
+   * ) exec echo 'Access only for Xpra programs'
+ ;;
+ esac

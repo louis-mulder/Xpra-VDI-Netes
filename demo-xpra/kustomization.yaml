@@ -1,0 +1,5 @@
+---
+secretGenerator:
+- name: db-credentials 
+  files:
+  - config

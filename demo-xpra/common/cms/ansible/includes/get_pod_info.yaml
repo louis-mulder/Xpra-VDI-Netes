@@ -1,0 +1,59 @@
+
+    - name: Find the used ip-addresses of the pod
+      shell: |
+             #!/bin/bash
+             (
+             cat <<EOF
+             #!/bin/bash
+             set -- \`cd /sys/class/net/ ; echo * \`
+             while [ "\${1}" != '' ]
+                do
+                       case \${1} in
+                       #(
+                          lo ) shift
+                       ;;
+                       #(
+                         eth0 )
+                             ADDR=\`ip -4 a show \${1}  | sed  -e '/valid_lft/,\$d'  | \
+                             sed  -e '/ inet/!d' -e 's%/..*%%' -e 's%^  *inet. *%%'\`
+                             K8_IP_ADDR=\${ADDR}
+                             shift
+                       ;;
+                       #(
+                         net1 )
+                             ADDR=''
+                             TRY=0
+                             while [ "\${TRY}" -lt 20 -a "\${ADDR}" = '' ]
+                             do
+                               ADDR=\`ip -4 a show \${1}  | sed  -e '/valid_lft/,\$d'  | \
+                               sed  -e '/ inet/!d' -e 's%/..*%%' -e 's%^  *inet. *%%'\`
+                               if [ "\${ADDR}" != '' ]
+                               then
+                                 TRY=20
+                                 IP_ADDR=\${ADDR} 
+                               else
+                                 TRY=\`expr \${TRY} + 1\`
+                                 sleep 1
+                               fi
+                             done
+                             IP_ADDR=\${ADDR}
+                             shift
+                       ;;
+                       esac
+             done
+             echo "IP_ADDR=\${IP_ADDR};K8_IP_ADDR=\${K8_IP_ADDR}"
+             EOF
+             )| kubectl -n "{{ name_space }}" exec -i "{{ pod_name }}" --container="{{ session_cname }}" -- bash 
+      args:
+         executable: /bin/bash
+      register: command_status
+      ignore_errors: True
+
+    - name: Set pod_ipaddress
+      set_fact:
+           ipaddresses: "{{ command_status.stdout_lines[0] }}"
+      when: 'command_status is defined'
+
+    - name: Output message so it can be used in the Xpra proxy server
+      debug:
+        msg: 'ERRMSG=;USER={{ user }};{{ ipaddresses }};POD_NAME={{ pod_name }};NAMESPACE={{ name_space }};CONTAINER={{ session_cname }}'

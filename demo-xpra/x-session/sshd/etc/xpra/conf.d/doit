@@ -1,0 +1,28 @@
+#!/bin/bash
+#id testuser1 | sed -e 's/.*groups=//' -e 's/[0-9][0-9]*(//g' -e 's/)//g'
+
+TOPDIR=/data/srv/vdi
+DESTDIR=/run/testdir
+DEPTH=`echo ${DESTDIR} | sed -e 's%^/%%' -e 's%.*/%../%g' -e 's%/.*$%/..%'`
+USER=testuser1
+GRP_REGEXP=`id "${USER}" | sed -e 's/ //g' -e 's%^.*groups=%%' -e 's%[0-9][0-9]*(%%g' -e 's%)%%g' -e 's%,%|%g'`
+
+
+echo $DEPTH
+
+#exit 0
+
+for conf in `find ${TOPDIR}/etc/xpra/conf.d -name '*.conf' -print|\
+	     egrep 'users/'${USER}'|default|'"${GRP_REGEXP}"`
+do
+  echo ${conf}
+done  | sort -ur | while read txt
+                   do
+			   DESTNAME=`basename ${txt}`
+
+			   if [ ! -h ${DESTDIR}/`echo ${DESTNAME} | sed -e 's%^[0-9][0-9]*%\*%'` ]   
+		            then
+			      ln -s ${DEPTH}${txt} ${DESTDIR}/${DESTNAME}
+			   fi
+                    done
+			      

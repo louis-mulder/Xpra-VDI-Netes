@@ -1,0 +1,44 @@
+#!/bin/bash
+
+REGISTRY='registry.demo.xpra:5443/xpra-sshd'
+export REGISTRY
+
+
+
+CONTAINER=${1:-`buildah from centos:stream8`}
+(
+cat <<EOF
+#!/bin/bash
+[ -f /etc/profile.d/lang.sh ] && source /etc/profile.d/lang.sh 
+yum makecache
+yum install -y wget curl
+yum -y install epel-release
+
+cd /etc/yum.repos.d/
+yum install -y openssh-server openssh-clients openssh-askpass openssh-ldap sssd rsh avahi-tools \
+               avahi vim bash-completion glibc-all-langpacks langpacks-en \
+	       socat oddjob dhcp-client dhcp-common dhcp-libs authconfig oddjob-mkhomedir
+
+rpm -ev --nodeps dracut NetworkManager dracut-squash dracut-network linux-firmware NetworkManager-wifi \
+	         wpa_supplicant > /dev/null 2>&1
+cd /var
+mkdir initial-log
+cd log
+tar cf /var/initial-log/log.tar .
+authconfig --enablemkhomedir --update
+sed -i -e 's/\\(^group.* \\)\\(systemd\\)/\\1/' -e 's/\\(^passwd.* \\)\\(systemd\\)/\\1/' /etc/nsswitch.conf
+KEYS=`cd /etc/ssh ; echo ssh_host_*`
+[ "${KEYS}" = 'ssh_host_*' ] && ssh-keygen -A
+exit 0
+EOF
+) | buildah run -t ${CONTAINER} bash
+
+if [ "${REGISTRY}" != '' ]
+then
+IMAGE=`buildah commit ${CONTAINER}`
+
+echo ${IMAGE}
+
+podman tag ${IMAGE} ${REGISTRY}
+podman push  ${REGISTRY}
+fi

@@ -1,0 +1,202 @@
+#
+# Louis Mulder May 2023
+#
+# Definition of xpra client pod
+#
+#
+      - name: "Create the pod {{ pod_name }}"
+        k8s:
+          api_version: v1
+          namespace: "{{ name_space }}"
+          name: "{{ pod_name }}"
+          wait: yes
+#
+          kind: Pod
+          definition:
+           metadata:
+             name: "{{ pod_name }}"
+             labels:
+               environment: production
+               app: "{{ pod_name }}-xpra"
+               user: "{{ user }}"
+               owner: "{{ user }}"
+             annotations:
+               user: "{{ user }}"
+               owner: "{{ user }}"
+               k8s.v1.cni.cncf.io/networks: "{{ network_att_def }}"
+           spec:
+              hostname: "{{ pod_name }}"
+              initContainers:
+              - name: init-iptables
+                image: "registry.demo.xpra:5443/xpra-iptables"
+                securityContext:
+                  capabilities:
+                     add: ["NET_ADMIN", "SYS_TIME","SYS_ADMIN","NET_RAW"]
+                command: [ "iptables-restore","/srv/etc/iptables/rules" ]
+                volumeMounts:
+                - mountPath: /srv
+                  name: "{{ name_space }}"
+                  subPath: common/iptables
+                  readOnly: true
+              containers:
+              - name: "{{ session_cname }}"
+                image: "{{ image_registry }}/{{ pod_image }}"
+                lifecycle:
+                   preStop:
+                      exec:
+                        command: ["/bin/sh","-c","xpra stop :0"]
+                securityContext:
+                  capabilities:
+                    add: ["NET_ADMIN", "NET_RAW", "SYS_TIME"]
+                command: ["/bin/bash", "-c" ]
+                args: ["PATH=${PATH}:/srv/bin;start.sh {{ xsession_ }}"]
+                env:
+                - name: XSESSION
+                  value: "{{ xsession_ }}"
+                - name: XPRA_TOPDIR_INT
+                  value: "{{ srv }}"
+                - name: LOCALTIME 
+                  value: "{{ localtime }}"
+                - name: PASSWD_ENTRY
+                  value: "{{ user }}:*:{{ user_uid }}:{{ user_gid }}:{{ user_gecos }}:{{ user_homedir }}:{{ user_shell }}"
+                - name: GROUP_ENTRIES
+                  value: "{{ user }}:*:{{ user_gid }}:"
+                - name: SRC_PORT
+                  value: "{{ src_port }}"
+                - name: NAMESPACE
+                  value: "{{ name_space }}"
+                - name: LDAP_DOMAIN
+                  value: "{{ ldap_domain }}"
+                - name: XPRA_OPTIONS
+                  value: "{{ xpra_options }}"
+
+                volumeMounts:
+                - mountPath: /sys/fs/cgroup
+                  name: sys
+                  subPath: fs/cgroup
+                  readOnly: true
+                - mountPath: /dev/shm
+                  name: dshm
+                - mountPath: "/srv/etc/init.d"
+                  name: "{{ name_space }}"
+                  subPath: common/etc/init.d
+                  readOnly: true
+                - mountPath: "{{ srv }}"
+                  name: "{{ name_space }}"
+                  subPath: "x-session/{{ session_cname }}"
+                - mountPath: "{{ shrd_tmp | default('/shrd_tmp') }}"
+                  name: "{{ name_space }}"
+                  subPath: common/scratch/tmp
+                - mountPath: "{{ home_dir }}"
+                  name: "home-{{ user }}"
+                - mountPath: /dev/uinput
+                  name: dev
+                  subPath: uinput
+                - mountPath: /run/xpra
+                  name: "shared-ephemeral"
+                  subPath: "xpra"
+
+              - name: "{{ entrance_cname }}"
+                securityContext:
+                  capabilities:
+                    add: ["NET_ADMIN", "NET_RAW", "SYS_TIME"]
+                command: ["/bin/bash", "-c" ]
+                args: ["PATH=${PATH}:/srv/bin;export PATH ; exec start.sh" ]
+                env:
+                - name: XSESSION
+                  value: "{{ xsession_ }}"
+                - name: XPRA_TOPDIR_INT
+                  value: "{{ srv }}"
+                - name: LOCALTIME
+                  value: "{{ localtime }}"
+                - name: PASSWD_ENTRY
+                  value: "{{ user }}:*:{{ user_uid }}:{{ user_gid }}:{{ user_gecos }}:{{ user_homedir }}:{{ user_shell }}"
+                - name: GROUP_ENTRIES
+                  value: "{{ user }}:*:{{ user_gid }}:"
+                - name: SRC_PORT
+                  value: "{{ src_port }}"
+                - name: NAMESPACE
+                  value: "{{ name_space }}"
+                - name: LDAP_DOMAIN
+                  value: "{{ ldap_domain }}"
+                - name: ENTRANCE_CNAME
+                  value: "{{ entrance_cname }}"
+                - name: SESSION_CNAME
+                  value: "{{ session_cname }}"
+                - name: PODNAME
+                  value: "{{ pod_name }}"
+                image: "{{ image_registry }}/xpra-sshd"
+                lifecycle:
+                      preStop:
+                        exec:
+                          command: ["/bin/sh","-c","kill `ps agx|grep sshd|grep -v grep|awk '{print $1}'`"]
+                volumeMounts:
+                - mountPath: "/etc/ssh-keys"
+                  name: "{{ name_space }}"
+                  subPath: common/etc/ssh-keys
+                - mountPath: /dev/uinput
+                  name: dev
+                  subPath: uinput
+                - mountPath: /root/.kube
+                  name: xpra-proxy-kube
+                  readOnly: true
+                - mountPath: "{{ srv }}"
+                  name: "{{ name_space }}"
+                  subPath: "x-session/{{ entrance_cname }}"
+                - mountPath: /srv/etc/init.d
+                  name: "{{ name_space }}"
+                  subPath: common/etc/init.d
+                  #readOnly: true
+                - mountPath: /run/xpra
+                  name: "shared-ephemeral"
+                  subPath: "xpra"
+
+              volumes:
+
+              - name: "{{ name_space }}"
+                nfs:
+                 server: "{{ srv_server }}"
+                 path: "{{ src_srv }}"
+
+              - name: "home-{{ user }}"
+                nfs:
+                 server: "{{ home_dir_server }}"
+                 path: "{{ src_home_dir }}"
+              - name: "dshm"
+                emptyDir:
+                  medium: Memory
+              - name: "shared-ephemeral"
+                emptyDir:
+                medium: Memory
+                sizeLimit: 1024Mi
+              - name: dev
+                hostPath:
+                 path: /dev
+              - name: sys
+                hostPath:
+                 path: /sys
+                 type: Directory
+              - name: "xpra-proxy-kube"
+                secret:
+                  secretName: "xpra-proxy-kube"
+                  defaultMode: 256
+
+
+              hostAliases: 
+               - ip: "{{ ldap_domain_server_ip1 }}"
+                 hostnames:
+                 - "{{ ldap_domain_server_hostname1 }}"
+                 - "{{ ldap_domain_server_hostname1 | regex_replace( '\\..*$', '') }}"
+               - ip: "{{ ldap_domain_server_ip2 }}"
+                 hostnames: 
+                 - "{{ ldap_domain_server_hostname2 }}"
+                 - "{{ ldap_domain_server_hostname2 | regex_replace( '\\..*$', '') }}"
+               - ip: "{{ cluster_endpoint_ip }}"
+                 hostnames: 
+                 - "{{ cluster_endpoint_hostname }}"
+                 - "{{ cluster_endpoint_hostname | regex_replace( '\\..*$', '') }}"
+
+              terminationGracePeriodSeconds: 2
+              restartPolicy: Never
+
+#args: ["PATH=${PATH}:/srv/bin;sleep 36000"]

@@ -1,0 +1,473 @@
+---
+
+- name: Create or find Xpra Client Pod
+  hosts: localhost
+  vars:
+      playbook_absoluteName: "{{ (lookup('file', '/proc/self/cmdline') | regex_replace('\u0000',' ')).split() | select('match','^.*[.]ya?ml$') | list | first }}"
+      playbook_baseName: "{{ playbook_absoluteName | basename }}"
+      name_space: "{{ playbook_baseName | regex_replace('-[Cc][Ll][Ii][Ee][Nn][Tt].*','') }}"
+      #name_space: "demo-xpra"
+      waiting_pod: False
+      default_xsession: "seamless"
+      xsession: "seamless"
+      xpra_options: ""
+      localtime: /usr/share/zoneinfo/Europe/Amsterdam
+      ldap_domain: "demo.xpra"
+      ldap_domain_server_ip1: "192.168.1.233"
+      ldap_domain_server_ip2: "192.168.1.237"
+      ldap_domain_server_hostname1: "idm01.demo.xpra"
+      ldap_domain_server_hostname2: "idm02.demo.xpra"
+      cluster_endpoint_ip: "192.168.1.230"
+      cluster_endpoint_hostname: "cluster-endpoint.demo.xpra"
+      src_port: "14500"
+      image_default_suffix: "xfce4"
+      srv: "/srv"
+      include_pod_definition: /srv/ansible/includes/demo-xpra.yaml
+      include_pod_info: /srv/ansible/includes/get_pod_info.yaml
+      image_prefix: "xpra"
+      image_registry: "registry.demo.xpra:5443"
+      image_registry_proto: "https://"
+      srv_server: "synology02.demo.xpra"
+      src_srv: "/volume2/xpra/data/srv/{{ name_space }}/"
+      show_debug_messages: 'no'
+      logging: "/var/log"
+#
+# Edit below only if you know what are you doing
+#
+      user: ''
+      pod_stats: []
+      pod_stats_tmp: []
+      pod_ipaddress: ''
+      pod_name_list: []
+      pod_sessions: []
+      delete_pod: False
+      k8_pod_ipaddress: ''
+      pod_running: False
+      create_pod: "yes"
+      dotsign: '-2e'
+      atsign : '-40'
+      dashsign: '--'
+      empty_str: '<empty>'
+      session_cname: "xpra"
+      entrance_cname: "sshd"
+      network_att_def: ""
+
+  tasks:
+    - name: Get network-attachment-definitions
+      shell: kubectl -n {{ name_space }} get network-attachment-definitions --no-headers=true | sed -e 's/  *.*//'
+      register: network_list
+
+    - name: Construct line k8s.v1.cni.cncf.io/networks 
+      set_fact:
+            network_att_def: "{{ network_list.stdout_lines[0] }}"
+
+    - name: DEBUG
+      debug:
+         msg: "XPRA_OPTIONS {{ xpra_options }}"
+      when: ' show_debug_messages != "no" '
+
+    - name: Check user is specified on cmdline
+      fail:
+           msg: "You must use -e user=<existing username/loginname>"
+      when: user is not defined
+      ignore_errors: false
+
+    - name: Check if user is available
+      getent:
+        database: passwd
+        key: "{{ user }}"
+        fail_key: false
+
+    - name: Check passwd-string
+      fail:
+          msg: "{{ user }} not found"
+      when: ansible_facts.getent_passwd[ user ][0] is not defined
+
+    - name: Set user information
+      set_fact:
+           user_uid: "{{ ansible_facts.getent_passwd[ user ][1] }}"
+           user_gid: "{{ ansible_facts.getent_passwd[ user ][2] }}"
+           user_gecos: "{{ ansible_facts.getent_passwd[ user ][3] }}"
+           user_homedir: "{{ ansible_facts.getent_passwd[ user ][4] }}"
+           user_shell: "{{ ansible_facts.getent_passwd[ user ][5] }}"
+           home_dir_server: "synology02.demo.xpra"
+           home_dir: "{{ ansible_facts.getent_passwd[ user ][4] }}"
+           src_home_dir: "/volume2/{{ ansible_facts.getent_passwd[ user ][4] }}"
+      when: ansible_facts.getent_passwd[ user ][0] is defined
+
+#
+# Replace - signs in a usrname by '--' then replace '@' by '-40'
+# and '.' by '-2e'. A pod-name may only contains lowercase/digits or '-'
+#
+    - name: "If username contains '-'signs replace them with '--', '@' by '{{ atsign }}' and '.' by '{{ dotsign }}' "
+      set_fact:
+        pod_name_prefix: "{{ user | regex_replace( '-' ,dashsign) |
+                     regex_replace('@',atsign) | regex_replace( '\\.', dotsign) }}"
+      when: ' "." in user or "@" in user '
+
+    - name: "If pod_name_prefix is not defined set var to {{ user }}"
+      set_fact:
+        pod_name_prefix: "{{ user }}"
+      when: pod_name_prefix is not defined
+
+#    - meta: end_play
+
+    - name: Get status of pods running by user 
+      shell: |
+        exec 2> /dev/null
+        bash -c "kubectl -n {{ name_space }} get pod -l owner={{ user }}  -o wide --no-headers |\
+                 expand | sed -e 's/\ \ */|/g' "
+      ignore_errors: True
+      register: pod_list
+
+    - name: pod_list_stdout to list
+      set_fact:
+        pod_stats:  "{{ pod_stats + [ item ]  }}"
+      with_items:  "{{ pod_list.stdout_lines  }}"
+
+    - name: Set_fact count of running sessions 
+      set_fact:
+            number_of_sessions: "{{ pod_stats | length }}"
+#
+# Begin attach session only
+#
+    - block:
+
+      - name: Check number of sessions and create_pod=no
+        debug:
+          msg: "ERRMSG='No sessions found to attach for user {{ user }}'"
+      - meta: end_play
+      when: ' create_pod == "no" and number_of_sessions | int < 1 '
+
+      # 
+      # If user is only attaching a session and has only one active
+      # If POD-status is not "Running" but in a ERROR state or whatever
+      #                  create_pod will be set to yes
+      #                  So it will re-created.
+      #
+    - name: Set image_suffix if it is not defined or empty
+      set_fact:
+         image_suffix_: "{{ image_default_suffix }}"
+      when: image_suffix is not defined or image_suffix == ""
+
+    - block:
+
+      - name: "Convert pod_stats to a string so we can split it to a list"
+        set_fact:
+            pod_info: "{{ item }}"
+        with_items: "{{ pod_stats }}"
+
+      - name: "Convert pod_stats to list"
+        set_fact:
+          pod_info_list: "{{ pod_info.split('|') }}"
+
+      - name: "Set variables pod_name,status etc."
+        set_fact:
+           pod_name: "{{ pod_info_list[0] }}"
+           pod_status: "{{ pod_info_list[2] | upper }}"
+           k8_pod_ipaddress: "{{ pod_info_list[5] }}"
+
+      - name: Display podinfo when status is RUNNING
+        import_tasks: "{{ include_pod_info }}"
+        when:  ' pod_status | upper == "RUNNING" '
+
+      - meta: end_play
+        when:  ' pod_status | upper == "RUNNING" '
+
+      - name: Pod status is not RUNNING, display message
+        debug:
+          msg: "ERRMSG='Session {{ pod_name }} of user {{ user }} is found  but is not running, status {{ pod_status }}'"
+
+      - meta: end_play
+#
+      when: ' create_pod == "no" and number_of_sessions | int == 1 '
+#
+    - block:
+
+      - name: "Search pod_name in pod_stats"
+        set_fact:
+            pod_stats_tmp: "{{ pod_stats_tmp + [ item ] }}"
+            pod_name_list: "{{ pod_name_list + [ item  | regex_replace('\\|.*$','') ] }}"
+        with_items:  "{{ pod_stats }}"
+        when: item | regex_search( image_suffix | default( xsession ) ) 
+     
+      - name: Set_fact count of running left-over sessions
+        set_fact:
+           _number_of_sessions:  "{{ pod_name_list | length }}"
+           #_number_of_sessions:  "{{ pod_stats_tmp | length }}"
+
+      - name: Create short podname list
+        set_fact:
+               pod_sessions: "{{ pod_sessions +  [ item  | regex_replace('\\|.*$','') |  regex_replace('([.]*-)([.]*$)','\\2') ] }} "
+        with_items: "{{ pod_stats }}"
+        when: ' _number_of_sessions | int != 1 '
+
+      - name: Compose err_message if _number_of_sessions is not 1
+        set_fact:
+               err_msg: "ERRMSG='More as one or zero sessions found {{ pod_sessions }} for user {{ user }} with search-string {{ image_suffix }}'"
+        when: ' _number_of_sessions | int != 1 and image_suffix != "" '
+
+      - name: Compose err_message if _number_of_sessions is not 1
+        set_fact:
+               err_msg: "ERRMSG='More as one or zero sessions found [ {{ pod_sessions }} ] for user {{ user }} with empty search-string/display '"
+        when: ' _number_of_sessions | int != 1 and image_suffix == "" '
+
+      - name: Check of number_of_sessions is 0 or > 1 and send message
+        debug:
+           msg: "{{ err_msg }}"
+        when: ' _number_of_sessions | int != 1'
+
+      #- name: Check of number_of_sessions is > 1 and display message
+        #debug:
+           #msg: "ERRMSG='More sessions found for user {{ user }} with search-string {{ image_suffix }}'"
+        #when: ' _number_of_sessions | int > 1 '
+#
+      - meta: end_play
+        when: ' _number_of_sessions | int != 1 '
+
+      - name: Convert pod_stats to a string so we can split it to a list
+        set_fact:
+            pod_info: "{{ item }}"
+        with_items: "{{ pod_stats_tmp }}"
+
+      - name: "Convert pod_stats to list"
+        set_fact:
+          pod_info_list: "{{ pod_info.split('|') }}"
+
+      - name: Set variables pod_name,status etc.
+        set_fact:
+           pod_name: "{{ pod_info_list[0] }}"
+           pod_status: "{{ pod_info_list[2] | upper }}"
+           k8_pod_ipaddress: "{{ pod_info_list[5] }}"
+#      
+      - name: Display podinfo when status is RUNNING
+        import_tasks: "{{ include_pod_info }}"
+        when:  ' pod_status | upper == "RUNNING" '
+#
+      - name: Display error msg  when status is not RUNNING
+        debug:
+          msg: "ERRMSG='Session {{ pod_name }} found of user {{ user }} with search-string {{ image_suffix }} but is not running -- state: {{ pod_status }}'"
+        when:  ' pod_status | upper != "RUNNING" '
+
+      - meta: end_play
+#
+      when: ' create_pod == "no" '
+
+#
+# Begin of pod creation
+# create_pod=yes
+#
+      #- meta: end_play
+
+    #
+    # Determine the preferred or used container image
+    #
+    # Search for the words desktop/seamless and username
+    #
+
+    - name: Set fact image_suffix if it is not defined
+      set_fact:
+        image_suffix: "{{ image_default_suffix }}"
+      when: image_suffix is not defined
+
+    - name: Search the word desktop or seamless in image_suffix of so overrule xsession
+      set_fact:
+           xsession_: "{{ item }}"
+      with_items:
+      - desktop
+      - seamless
+      when: item is in image_suffix and image_suffix is defined
+#
+    - name: Set xsession on default when it is a empty string
+      set_fact:
+          xsession_: "{{ default_xsession }}"
+      when: ' xsession is defined and xsession == "" '
+
+    - name: Set_fact xsession_ if it is not defined
+      set_fact:
+        xsession_: "{{ xsession }}"
+      when: ' xsession_ is not defined and xsession != "" '
+
+    - name: Set replace expression
+      set_fact:
+          reg_search:  "{{ reg_search| default('') + item }}"
+      with_items:
+      - "(-desktop)|"
+      - "(-desktop-)|"
+      - "(desktop-)|"
+      - "(desktop)|"
+      - "(-seamless)|"
+      - "(-seamless-)|"
+      - "(seamless-)|"
+      - "(seamless)|"
+      - "(-{{ user }})|"
+      - "(-{{ user }}-)|"
+      - "({{ user }}-)|"
+      - "(^-)*"
+
+    - name: Strip-off the username and/or desktop/seamless of image_suffix
+      set_fact:
+           image_suffix_: "{{ image_suffix | lower | regex_replace( reg_search , '') }}"
+
+    - name: If image_suffix_ is empty take the default image_default_suffix
+      set_fact:
+           image_suffix_ : "{{ image_default_suffix }}"
+      when: image_suffix_ == ""
+
+    - name: Set fact image_suffix_ if it is not defined
+      set_fact:
+        image_suffix_: "{{ image_default_suffix }}"
+      when: image_suffix_ == ""
+
+    - name: Create podname 
+      set_fact:
+          pod_name: "{{ pod_name_prefix }}-{{ xsession_ }}-{{ image_suffix_ }}"
+          image_suffix: "{{ image_suffix_ }}"
+          pod_image: "{{ image_prefix }}-{{ image_suffix_ }}"
+
+    - name: "Search pod_name in pod_stats"
+      set_fact:
+            pod_info: "{{ item }}"
+      with_items: "{{ pod_stats }}"
+      when: "pod_name == item | regex_replace('\\|.*$', '' )"
+
+    - name: "Convert pod_info to list"
+      set_fact:
+         pod_info_list:  "{{ pod_info.split('|') }}" 
+      when: 'pod_info is defined'
+
+    - name: "Set variable status."
+      set_fact:
+       status: "{{ pod_info_list[2] | upper }}"
+       k8_pod_ipaddress: "{{ pod_info_list[5] }}"
+      when: 'pod_info is defined and pod_info_list is defined'
+#
+    - name: "If username contains '-'signs replace them with '--', '@' by '{{ atsign }}' and '.' by '{{ dotsign }}' "
+      set_fact:
+        pod_name_prefix: "{{ user | regex_replace( '-' ,dashsign) |
+                     regex_replace('@',atsign) | regex_replace( '\\.', dotsign) }}"
+      when: ' "." in user or "@" in user '
+
+    - name: "If pod_name_prefix is not defined set var to {{ user }}"
+      set_fact:
+        pod_name_prefix: "{{ user }}"
+      when: pod_name_prefix is not defined
+
+#    - meta: end_play
+
+    - name: Set image_suffix if it is not defined or empty
+      set_fact:
+         image_suffix: "{{ image_default_suffix }}"
+      when: ' image_suffix is not defined or image_suffix == "" '
+
+
+    #
+    # Determine the preferred or used container image
+    #
+    # Search for the words desktop/seamless and username
+    #
+    - block:
+
+      - name: Search the word desktop or seamless in image_suffix of so overrule xsession
+        set_fact:
+             xsession_: "{{ item }}"
+        with_items:
+        - desktop
+        - seamless
+        when: item is in image_suffix
+
+      - name: Set_fact xsession_ if it is not defined
+        set_fact:
+          xsession_: "{{ xsession }}"
+        when: xsession_ is not defined
+
+#
+# Be sure homedir exists
+#
+      - name: Check if homedir exists
+        stat:
+           path: "{{ user_homedir }}"
+        register: user_data
+  
+      - name: Create homedir
+        file:
+          path: "{{ user_homedir }}"
+          mode: '0700'
+          owner: "{{ user_uid }}"
+          group: "{{ user_gid }}"
+          recurse: yes
+          state: directory
+        when: not user_data.stat.exists
+
+      - name: Copy /etc/skel to homedir
+        copy:
+          src: "{{ item }}"
+          dest: "{{ user_homedir }}"
+          owner: "{{ user_uid }}"
+          group: "{{ user_gid }}"
+          mode: '0600'
+        with_fileglob:
+        - /etc/skel/*
+        - /etc/skel/.??*
+        when: not user_data.stat.exists
+
+
+    #- meta: end_play
+
+      - name: If number_of_sessions == 0 and set_fact delete_pod=no
+        set_fact:
+            delete_pod: False
+        when: ' number_of_sessions | int < 1 '
+ 
+      - name: If number_of_sessions == 1 and status != RUNNING set_fact delete_pod=yes
+        set_fact:
+            delete_pod: True
+        when: ' status is defined and number_of_sessions | int == 1 and status | upper != "RUNNING" '
+ 
+      - name: Search podname in founded pods
+        set_fact:
+          found_pod_info:  "{{ item }}"
+        with_items: "{{ pod_stats }}"
+        when: " item | regex_replace('\\|.*$', '' ) == pod_name and number_of_sessions | int > 0 "
+
+      - name:  Set_fact status of founded pod
+        set_fact:
+           pod_info: "{{ found_pod_info | split('|') }}" 
+        when: found_pod_info is defined
+  
+      - name:  Get status out of pod_info array
+        set_fact:
+           status: "{{ pod_info[2] }}" 
+        when: found_pod_info is defined
+  
+      - name: If status != RUNNING set delete_pod on yes
+        set_fact:
+            delete_pod: True
+        when: ' found_pod_info is defined and status | upper != "RUNNING" '
+
+
+      #- meta: end_play
+
+      - name: If status is RUNNING do not delete pod
+        kubernetes.core.k8s:
+          state: absent
+          kind: Pod
+          name: "{{pod_name}}"
+          namespace: "{{ name_space }}"
+          wait: true
+          wait_condition:
+            status: False #wait for status to be false
+          wait_sleep: 2  #check every 2 secs 
+        when: ' delete_pod == True '
+
+      #- meta: end_play
+      - name: Include pod definition yaml
+        import_tasks: "{{ include_pod_definition }}"
+        when: ' status | default ("unknown") | upper != "RUNNING" '
+
+
+   #- block:
+      when: ' create_pod == "yes" '
+
+    - name: Include pod get pod and display it
+      import_tasks: "{{ include_pod_info }}"

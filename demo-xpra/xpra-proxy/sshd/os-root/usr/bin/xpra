@@ -1,0 +1,194 @@
+#!/bin/bash
+
+# Louis Mulder Augustus 2023
+# SSH proxy server Xpra
+#
+# SSH connections using port 14222
+# 
+# With iptables (initcontainer) outbound with 22 to the underlaying
+# nodes is blocked
+#
+
+U_USER=`id -un`
+XPRA_PORT=14500
+XPRA_SSH_PORT=14222
+XPRA_OPTIONS=
+ANSIBLE_PLAYBOOK=/srv/ansible/playbooks/demo-xpra-client.yaml
+IMAGE_SUFFIX='xfce4'
+
+[ ${#} -lt 1 ] && exit 1
+
+ set -- ${*}
+ while [ "${1}" = '-c' ]
+ do
+     shift
+ done
+
+ CMD=`echo "${@}" | sed -e 's%^%#%' \
+                        -e 's/\\\$/'"'$'/"\
+                        -e 's/^#//'`
+ set -- `eval echo ${CMD}`
+
+
+get_session_or_start () {
+
+   OUTPUT=`rsh -n -l ${U_USER} localhost ansible-playbook  \
+            -e user=${U_USER} -e xsession=${xsession} \
+            -e image_suffix=${image_suffix} \
+            -e create_pod=${create_pod} \
+            ${XPRA_OPTIONS} \
+            ${ANSIBLE_PLAYBOOK} 2>&1  | sed -e '/ERRMSG=/!d' \
+                                            -e 's/^ *"//' \
+                                            -e 's/"$//' \
+                                            -e 's/'\''//g' \
+                                            -e 's/"//g'`
+
+      if [ "${OUTPUT}" != '' ]
+      then
+        set -- ${OUTPUT}
+        while [ "${1}" != '' ]
+        do
+           case ${1} in
+           #(
+                *=* )
+                      eval ${1}
+                      shift ${#}
+           ;;
+           #(
+                 * ) :
+           ;;
+           esac
+           shift
+        done
+       fi
+        
+         
+      if [ "${ERRMSG}" = '' ]
+      then
+         export USER K8_IP_ADDR IP_ADDR POD_NAME NAMESPACE CONTAINER
+      else
+         echo "${MSG}" 1>&2
+         exit 1
+      fi
+}  
+
+activate_ssh_proxy () {
+
+#
+# If pods are multihomed (multus)
+# Traffic will go over the second network
+#
+
+    USE_IP_ADDRESS=${IP_ADDR:-${K8_IP_ADDR}}
+
+    if [ "${USE_IP_ADDRESS}" != '' ]
+    then
+    XSESSION=`echo ${POD_NAME} | sed -e 's/'"${U_USER}"'-//'`
+
+     timeout 2 bash -c "</dev/tcp/${K8_IP_ADDR}/${XPRA_PORT}"
+     RC=${?}
+     if [ ${RC} != 0 ]
+     then
+     sleep 4
+     ITRY=1
+     while [ ${ITRY} -lt 100 -a ${RC} != 0 ]
+     do
+        ITRY=`expr ${ITRY} + 1`
+        timeout 2 bash -c "</dev/tcp/${K8_IP_ADDR}/${XPRA_PORT}"
+        RC=${?}
+        [ ${RC} != 0 ] && sleep 1
+     done
+     fi
+     else
+       echo "Unknown Error" 1>&2
+       exit 2
+     fi
+
+if [ "${USE_IP_ADDRESS}" != '' -a "${POD_NAME}" != '' ]
+then
+[ ! -d /tmp/${U_USER}/.ssh ] && mkdir -p /tmp/${U_USER}/.ssh 
+[ -f /tmp/${U_USER}/.ssh/id-rsa ] && rm -f  /tmp/${U_USER}/.ssh/id-rsa 
+ echo exec cat /etc/ssh-keys/id-rsa |\
+  rsh -l ${U_USER} localhost kubectl -n ${NAMESPACE} exec -i ${POD_NAME} --container sshd -- bash >  /tmp/${U_USER}/.ssh/id-rsa
+
+chmod 700  /tmp/${U_USER}/.ssh
+chmod 600  /tmp/${U_USER}/.ssh/id-rsa
+exec  ssh  -o UserKnownHostsFile=/dev/null -o StrictHostKeychecking=no -i /tmp/${U_USER}/.ssh/id-rsa -p ${XPRA_SSH_PORT:-14222} ${U_USER}@${USE_IP_ADDRESS} xpra _proxy
+else
+  echo "Failure can't find/create pod or ip-address" 1>&2
+  exit 1
+fi
+#)
+}
+
+while [ "${1}" != '' ]
+do
+ # If script will be also used as login shell
+ case "${1}" in
+ #(
+     echo*OSTYPE|\
+     command|\
+     command*xpra ) exec rsh -l ${U_USER} localhost ${@} 1> /dev/null 2>&1
+     ;;
+ #(
+     *proxy*  ) 
+             case ${1} in
+             #(
+                _proxy_start_desktop | proxy_start_desktop ) 
+                        xsession='desktop'
+                        create_pod='yes'
+              ;;
+             #(
+                _proxy_start | proxy_start ) 
+                        xsession='seamless'
+                        create_pod='yes'
+              ;;
+             #(
+                _proxy | proxy ) 
+                        create_pod='no'
+              ;;
+                _proxy_shadow_start | proxy_shadow_start )
+                        create_pod='no'
+             #(
+              ;;
+             esac
+
+             case ${2} in
+             #(
+             -* )
+                    :
+             ;;
+             #(
+              * )
+                image_suffix=${2}
+                shift 
+             ;;
+             esac
+     ;;
+#(
+    -*|--* ) case "${1}" in
+             #(
+                *=* ) OPTION="${1}"
+              ;;
+             #(
+                * ) OPTION="${1}=${2}"
+                    shift
+              ;;
+             esac
+               XPRA_OPTIONS="${XPRA_OPTIONS:+${XPRA_OPTIONS} ${OPTION}}"
+               XPRA_OPTIONS="${XPRA_OPTIONS:-${OPTION}}"
+           ;;
+
+ *%OS%* ) exit 0
+     ;;
+ *      ) image_suffix=${image_suffix:-${1}}
+          xsession=${xsession:-${image_suffix}}
+     ;;
+ esac
+shift
+done
+
+XPRA_OPTIONS="-e xpra_options='`echo ${XPRA_OPTIONS} | sed -e 's/ /${SP}/g'`'"
+
+get_session_or_start
+activate_ssh_proxy 

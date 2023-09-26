@@ -1,0 +1,64 @@
+# Configure in /srv/to-container/sshd/os-root/etc/sssd
+---
+- name: 
+  hosts: localhost
+  connection: local
+  vars:
+    ldap_server: "idm01.demo.xpra"
+    playbook_name: "{{ (lookup('file', '/proc/self/cmdline') | regex_replace('\u0000',' ')).split()|select('match','^[a-z-_/]*[.]y[a]*ml')|list|first }}"
+
+  tasks:
+
+    - name: "playbook name {{ playbook_name }}"
+      shell: date
+
+    - name: Create path  /srv/to-container/sshd/os-root/etc/ipa, placeholder certificate
+      file:
+        path: /srv/to-container/sshd/os-root/etc/ipa
+        recurse: true
+        state: directory
+        mode: '0755'
+      when: ldap_server is defined
+
+    - name: Obtain certificate for ldap provider for sssd
+      get_url:
+          url: "http://{{ ldap_server }}/ipa/config/ca.crt"
+          dest: /srv/to-container/sshd/os-root/etc/ipa/ca.crt
+      when: ldap_server is defined
+      delegate_to: localhost
+
+    - name: Copy SSSD conf to /srv/to-container/sshd/os-root/etc/ansible/sssd -- ansible container
+      copy:
+         #
+         # Source: /srv/ansible/playbooks/sssd-sshd.yaml
+         #
+         mode: '0600'
+         dest: /srv/to-container/sshd/os-root/etc/sssd/sssd.conf
+         backup: yes
+         content: |
+          [domain/demo.xpra]
+          id_provider = ldap
+          auth_provider = ldap
+          chpass_provider = ldap
+          ldap_uri = ldap://idm01.demo.xpra
+          ldap_search_base = dc=demo,dc=xpra
+          ldap_id_use_start_tls = True
+          cache_credentials = True
+          ldap_tls_reqcert = allow
+          ldap_tls_cacert = /etc/ipa/ca.crt
+          
+          [sssd]
+          services = nss, pam, ssh
+          domains = demo.xpra
+          
+          [nss]
+          homedir_substring = /home
+          
+          [pam]
+
+          [ssh]
+
+      run_once: yes
+      when: ldap_server is defined
+      delegate_to: localhost
+

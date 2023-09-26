@@ -1,0 +1,49 @@
+#!/bin/bash
+
+# Louis Mulder 2023
+# Login shell for xpra, to avoid interactive sessions
+
+U_USER=`id -un`
+
+
+ if [ "${*}" = '' ]
+ then
+    echo "Only for use with xpra, go away" 1>&2
+    exit 1
+ fi
+
+ set -- ${*}
+
+ while [ "${1}" = '-c' ]
+ do
+     shift
+ done
+
+ CMD=`echo "${@}" | sed -e 's%^%#%' \
+                        -e 's/\\\$/'"'$'/"\
+                        -e 's/^#//'`
+ CMD=`eval echo ${CMD}`
+
+
+ case ${CMD} in
+ #(
+ command|\
+ command*xpra )
+              exec rsh -l ${U_USER} localhost ${CMD}
+ ;;
+ #(
+ *xpra*proxy* )
+              exec ${CMD}
+ ;;
+ #(
+ echo*OSTYPE )
+               echo 'exec echo ${OSTYPE}' | exec rsh -l ${U_USER} localhost  bash
+
+ ;;
+ #(
+ *%OS%* ) exit 0
+ ;;
+#   * ) echo 'Access only for Xpra programs'
+#       exit ${?}
+# ;;
+esac

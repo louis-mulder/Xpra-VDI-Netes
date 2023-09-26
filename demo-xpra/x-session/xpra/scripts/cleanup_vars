@@ -1,0 +1,7 @@
+#!/bin/bash
+for e in `set | sed -e '/^U_.*=.*/!d' -e 's/=.*$//' `
+do
+IFS=\=
+    unset ${e}
+done
+   

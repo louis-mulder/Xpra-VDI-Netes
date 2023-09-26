@@ -1,0 +1,58 @@
+#!/bin/bash
+
+REGISTRY='registry.demo.xpra:5443/xpra-ansible'
+export REGISTRY
+
+CONTAINER=${1:-`buildah from centos:stream8`}
+(
+cat <<EOF
+(
+cat <<EOB | tee /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=https://pkgs.k8s.io/core:/stable:/v1.28/rpm/
+enabled=1
+gpgcheck=1
+gpgkey=https://pkgs.k8s.io/core:/stable:/v1.28/rpm/repodata/repomd.xml.key
+EOB
+)
+#!/bin/bash
+[ -f /etc/profile.d/lang.sh ] && source /etc/profile.d/lang.sh 
+yum makecache
+yum install -y wget curl
+yum -y install epel-release epel-next-release
+
+cd /etc/yum.repos.d/
+yum install -y openssh-clients openssh-askpass openssh-ldap sssd xinetd avahi-tools \
+               socat avahi vim bash-completion glibc-all-langpacks langpacks-en \
+	       oddjob dhcp-client dhcp-common dhcp-libs authconfig oddjob-mkhomedir \
+	       rsh-server ansible rsh python3 python3-pyyaml python3-openshift \
+	       openssh-clients nss-mdns 
+yum install -y --nobest kubeadm kubelet kubectl python3-openshift
+mkdir -p /etc/ansible
+echo -e '[local]\nlocalhost ansible_connection=local' > /etc/ansible/hosts
+
+rpm -ev --nodeps dracut NetworkManager dracut-squash dracut-network linux-firmware NetworkManager-wifi \
+	         wpa_supplicant > /dev/null 2>&1
+cd /var
+mkdir initial-log
+cd log
+tar cf /var/initial-log/log.tar .
+authconfig --enablemkhomedir --update
+sed -i -e 's/\\(^group.* \\)\\(systemd\\)/\\1/' -e 's/\\(^passwd.* \\)\\(systemd\\)/\\1/' /etc/nsswitch.conf
+KEYS=`cd /etc/ssh ; echo ssh_host_*`
+[ "${KEYS}" = 'ssh_host_*' ] && ssh-keygen -A
+#
+exit 0
+EOF
+) | buildah run -t ${CONTAINER} bash
+
+if [ "${REGISTRY}" != '' ]
+then
+IMAGE=`buildah commit ${CONTAINER}`
+
+echo ${IMAGE}
+
+podman tag ${IMAGE} ${REGISTRY}
+podman push  ${REGISTRY}
+fi

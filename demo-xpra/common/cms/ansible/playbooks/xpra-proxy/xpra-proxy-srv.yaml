@@ -1,0 +1,276 @@
+---
+- name: 
+  hosts: localhost
+  connection: local
+
+  vars:
+    ldap_server: "idm01.demo.xpra"
+    playbook_name: "{{ (lookup('file', '/proc/self/cmdline') | regex_replace('\u0000',' ')).split()|select('match','^[a-z-_/]*[.]y[a]*ml')|list|first }}"
+
+  tasks:
+
+    - name: "playbook name {{ playbook_name }}"
+      shell: date
+
+    - name: Create path /etc/ipa, placeholder certificate
+      file:
+        path: /etc/ipa
+        state: directory
+        mode: '0755'
+      when: ldap_server is defined
+
+    - name: Obtain certificate for ldap provider for sssd
+      get_url:
+          url: "http://{{ ldap_server }}/ipa/config/ca.crt"
+          dest: /etc/ipa/ca.crt
+      when: ldap_server is defined
+      delegate_to: localhost
+
+    - name: Creates directories for sssd.conf and sshd_config
+      file:
+        path:  "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 0700
+        recurse: yes
+      with_items:
+      -  /srv/to-container/common/cms/os-root/etc/sssd
+      -  /srv/to-container/xpra-proxy/sshd/os-root/etc/sssd
+      -  /srv/to-container/x-session/sshd/os-root/etc/sssd
+      -  /srv/to-container/x-session/xpra/os-root/etc/sssd
+      -  /srv/to-container/common/cms/os-root/etc/ssh
+      -  /srv/to-container/x-session/sshd/os-root/etc/ssh
+      -  /srv/to-container/xpra-proxy/sshd/os-root/etc/ssh
+
+#
+# Source pod/container: /srv/ansible/playbooks/sssd-xpra-proxy.yaml
+# Source via NFS: /data/srv/demo-xpra/common/cms/ansible/playbooks/xpra-proxy/xpra-proxy-srv.yml
+#
+    - name: Copy SSSD conf to /etc/sssd -- x-session pod (sshd) container during startup
+      copy:
+         mode: '0600'
+         dest: /srv/to-container/xpra-proxy/sshd/os-root/etc/sssd/sssd.conf
+         backup: yes
+         content: |
+           [domain/demo.xpra]
+           id_provider = ldap
+           autofs_provider = ldap
+           auth_provider = ldap
+           chpass_provider = ldap
+           ldap_uri = ldap://idm01.demo.xpra
+           ldap_search_base = dc=demo,dc=xpra
+           ldap_id_use_start_tls = True
+           cache_credentials = True
+           ldap_tls_reqcert = allow
+           ldap_tls_cacert = /etc/ipa/ca.crt
+
+           [sssd]
+           services = nss, pam
+           domains = demo.xpra
+
+           [nss]
+           homedir_substring = /home
+
+           [pam]
+
+      run_once: yes
+      when: ldap_server is defined
+      delegate_to: localhost
+
+    - name: Copy SSSD conf to /etc/sssd --  xpra-proxy creator (Ansible) container
+      copy: 
+         mode: '0600'
+         dest: "{{ item }}"
+         backup: yes
+         content: |
+          #
+          # sssd.conf for container "{{ item | regex_replace('/os-root.*','') | basename }}"
+          #
+          [domain/demo.xpra]
+          id_provider = ldap
+          auth_provider = ldap
+          chpass_provider = ldap
+          ldap_uri = ldap://{{ ldap_server }}
+          ldap_search_base = dc=demo,dc=xpra
+          ldap_id_use_start_tls = True
+          cache_credentials = True
+          ldap_tls_reqcert = allow
+          ldap_tls_cacert = /etc/ipa/ca.crt
+
+          [sssd]
+          services = nss, pam
+          
+          domains = demo.xpra
+
+          [nss]
+          homedir_substring = /home
+          
+          [pam]
+      with_items:
+      - /srv/to-container/common/cms/os-root/etc/sssd/sssd.conf
+      - /srv/to-container/xpra-proxy/ssl/os-root/etc/sssd/sssd.conf
+      - /srv/to-container/x-session/sshd/os-root/etc/sssd/sssd.conf
+      - /srv/to-container/x-session/xpra/os-root/etc/sssd/sssd.conf
+      - /srv/to-container/sshd/os-root/etc/sssd/sssd.conf
+
+      run_once: yes
+      when: ldap_server is defined
+      delegate_to: localhost
+
+    - name: Copy sshd_config to /etc/ssh -- x-session pod (sshd) container during startup
+      copy:
+         mode: '0600'
+         dest: /srv/to-container/x-session/xpra/os-root/etc/ssh/sshd_config
+         backup: yes
+         content: |
+            #	$OpenBSD: sshd_config,v 1.103 2018/04/09 20:41:22 tj Exp $
+            # This is the sshd server system-wide configuration file.  See
+            # sshd_config(5) for more information.
+
+            # This sshd was compiled with PATH=/usr/bin:/bin:/usr/sbin:/sbin
+
+            # The strategy used for options in the default sshd_config shipped with
+            # OpenSSH is to specify options with their default value where
+            # possible, but leave them commented.  Uncommented options override the
+            # default value.
+
+            #Port 22
+            #AddressFamily any
+            #ListenAddress 0.0.0.0
+            #ListenAddress ::
+
+            #HostKey /etc/ssh/ssh_host_rsa_key
+            #HostKey /etc/ssh/ssh_host_ecdsa_key
+            #HostKey /etc/ssh/ssh_host_ed25519_key
+
+            # Ciphers and keying
+            #RekeyLimit default none
+
+            # Logging
+            #SyslogFacility AUTH
+            #LogLevel INFO
+
+            # Authentication:
+            
+            #LoginGraceTime 2m
+            PermitRootLogin yes
+            #StrictModes yes
+            #MaxAuthTries 6
+            #MaxSessions 10
+
+            PubkeyAuthentication yes
+            
+            # Expect .ssh/authorized_keys2 to be disregarded by default in future.
+            AuthorizedKeysFile	.ssh/authorized_keys .ssh/authorized_keys2
+
+            #AuthorizedPrincipalsFile none
+
+            AuthorizedKeysCommand /usr/bin/sss_ssh_authorizedkeys
+            AuthorizedKeysCommandUser nobody
+
+            # For this to work you will also need host keys in /etc/ssh/ssh_known_hosts
+            #HostbasedAuthentication no
+            # Change to yes if you don't trust ~/.ssh/known_hosts for
+            # HostbasedAuthentication
+            #IgnoreUserKnownHosts no
+            # Don't read the user's ~/.rhosts and ~/.shosts files
+            #IgnoreRhosts yes
+            
+            # To disable tunneled clear text passwords, change to no here!
+            #PasswordAuthentication yes
+            #PermitEmptyPasswords no
+
+            # Change to yes to enable challenge-response passwords (beware issues with
+            # some PAM modules and threads)
+            ChallengeResponseAuthentication no
+
+            # Kerberos options
+            #KerberosAuthentication no
+            #KerberosOrLocalPasswd yes
+            #KerberosTicketCleanup yes
+            #KerberosGetAFSToken no
+
+            # GSSAPI options
+            #GSSAPIAuthentication no
+            #GSSAPICleanupCredentials yes
+            #GSSAPIStrictAcceptorCheck yes
+            #GSSAPIKeyExchange no
+            
+            # Set this to 'yes' to enable PAM authentication, account processing,
+            # and session processing. If this is enabled, PAM authentication will
+            # be allowed through the ChallengeResponseAuthentication and
+            # PasswordAuthentication.  Depending on your PAM configuration,
+            # PAM authentication via ChallengeResponseAuthentication may bypass
+            # the setting of "PermitRootLogin without-password".
+            # If you just want the PAM account and session checks to run without
+            # PAM authentication, then enable this but set PasswordAuthentication
+            # and ChallengeResponseAuthentication to 'no'.
+            UsePAM yes
+            
+            #AllowAgentForwarding yes
+            #AllowTcpForwarding yes
+            #GatewayPorts no
+            X11Forwarding yes
+            #X11DisplayOffset 10
+            #X11UseLocalhost yes
+            #PermitTTY yes
+            PrintMotd no
+            #PrintLastLog yes
+            #TCPKeepAlive yes
+            #PermitUserEnvironment no
+            #Compression delayed
+            #ClientAliveInterval 0
+            #ClientAliveCountMax 3
+            #UseDNS no
+            #PidFile /var/run/sshd.pid
+            #MaxStartups 10:30:100
+            #PermitTunnel no
+            #ChrootDirectory none
+            #VersionAddendum none
+
+            # no default banner path
+            #Banner none
+            
+            # Allow client to pass locale environment variables
+            AcceptEnv LANG LC_*
+            
+            # override default of no subsystems
+            Subsystem sftp	/bin/false
+            #Subsystem sftp	/usr/lib/openssh/sftp-server
+
+            # Example of overriding settings on a per-user basis
+            #Match User anoncvs
+            #	X11Forwarding no
+            #	AllowTcpForwarding no
+            #	PermitTTY no
+            #	ForceCommand cvs server
+            PasswordAuthentication yes
+
+      run_once: yes
+      delegate_to: localhost
+
+    - name: copying sshd_config to all other pods/containers
+      copy:
+        src: /srv/to-container/x-session/xpra/os-root/etc/ssh/sshd_config
+        dest:  "{{ item }}/sshd_config"
+      with_items:
+      - /srv/to-container/xpra-proxy/sshd/os-root/etc/ssh
+      - /srv/to-container/common/cms/os-root/etc/ssh
+      - /srv/to-container/x-session/sshd/os-root/etc/ssh
+
+      run_once: yes
+      delegate_to: localhost
+
+    - name: Appending sshd_config for Xsession pod
+      blockinfile: 
+       state: present
+       insertafter: EOF
+       dest: "{{ item }}"
+       content: |
+                 PermitOpen 127.0.0.1:14500 localhost:14500 127.0.0.1:14080 localhost:14080
+      with_items:
+      - /srv/to-container/x-session/sshd/os-root/etc/ssh/sshd_config
+
+      run_once: yes
+      delegate_to: localhost
