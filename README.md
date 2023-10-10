@@ -1,8 +1,6 @@
 # Xpra-VDI-Netes
 Running Xpra sessions in a Kubernetes cluster
 
- VDI sessions with Xpra on a Kubernetes cluster
-
  The whole setup is based on NFS shared storage. All the images are
  based on Centos 8. To run the demo you need to untar the tarball
  on a exported filessystem.
@@ -64,7 +62,7 @@ Running Xpra sessions in a Kubernetes cluster
 
  Create the namespace demo-xpra with kubectl create namespace demo-xpra
  and create the secret xpra-proxy-kube with 
-  kubectl -n demo-xpra create secret xpra-proxy-kube --from-file=/root/.kube/config
+  kubectl -n demo-xpra create secret generic xpra-proxy-kube --from-file=/root/.kube/config
 
  Step 4: 
 
